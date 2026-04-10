@@ -1,0 +1,619 @@
+<Document>
+<Version> 23 </Version>
+<JMadonnaVersion> 10.7.9 </JMadonnaVersion>
+<Bounds> 0 0 1440 798 </Bounds>
+<NotesEditor>
+<jeditorpane>
+<size>13</size><family>Lucida Grande</family>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</jeditorpane>
+</NotesEditor>
+<jmadonna.EquationPanel>
+<DocPanel>
+</DocPanel>
+<jeditorpane>
+<size>12</size><family>Serif</family>METHOD EULER
+
+{------------------------------------------------------------}
+{ Phagocyte control of a bacterial infection with a biofilm   }
+{ (refuge) compartment and pulsed antibiotic therapy.         }
+{                                                            }
+{ Key design choices:                                         }
+{ 1) Immune recruitment is driven by planktonic bacteria only }
+{    (N + NR), reflecting that circulating signals track      }
+{    exposed bacterial burden more than quiescent biofilm.    }
+{ 2) Total burden Ntot = planktonic + biofilm is what we plot }
+{    for “clearance”.                                        }
+{ 3) Antibiotics start when BOTH immune activation is high    }
+{    (I <gt> Imin) AND symptoms/bacterial burden have accumulated}
+{    (Bcum <gt> Bmin), then continue in pulses for a fixed course}
+{ 4) Biofilm is slower-growing, partially shielded from immune}
+{    killing and antibiotic exposure, and can shed back into  }
+{    planktonic. Antibiotics also increase biofilm sloughing  }
+{    during the course (disruption).                          }
+{ 5) Clearance: once Ntot <lt> 1, we force bacteria to zero to   }
+{    avoid numerical “bubbling” around the threshold.         }
+{------------------------------------------------------------}
+
+STARTTIME = 0
+STOPTIME  = 480     {hours; 480 h = 20 days}
+DT        = 0.0001
+
+
+{-------------------------}
+{ State variables (ICs)   }
+{-------------------------}
+Init N        = 10        {planktonic, antibiotic-sensitive bacteria}
+Init NR       = 0         {planktonic, resistant bacteria}
+Init RefN     = 0         {biofilm/refuge, sensitive bacteria}
+Init RefNR    = 0         {biofilm/refuge, resistant bacteria}
+
+Init I        = 1000      {free phagocytes (e.g., neutrophils/monocytes)}
+Init IB       = 0         {engulfing/activated phagocytes}
+
+Init r        = 1000      {limiting resource controlling growth (Monod)}
+Init A        = 0         {antibiotic concentration}
+
+Init PhagOn   = 0         {immune latch: turns on once planktonic is high}
+Init TxOn     = 0         {treatment latch: turns on once trigger is met}
+Init TTA      = 0         {timer for dosing interval}
+Init Tcourse  = 0         {elapsed time on antibiotics since onset}
+Init Bcum     = 0         {cumulative bacterial burden/symptom score proxy}
+
+Init Cleared  = 0         {clearance latch}
+Init NbioStart= 0         {biofilm burden at treatment onset (latched)}
+
+{Fixed per-run stochasticity for phagocytosis rate}
+Init QQ = Random(0.45, 0.55)
+d/dt(QQ) = 0
+
+
+{-------------------------}
+{ Parameters: environment }
+{-------------------------}
+C  = 3000     {resource in reservoir}
+w  = 0.1      {chemostat dilution rate for planktonic compartment}
+
+k  = 1        {Monod constant for planktonic growth vs resource}
+e  = 1E-7     {resource consumption per growth}
+
+
+{-------------------------}
+{ Parameters: bacteria    }
+{-------------------------}
+vmax  = 1.3    {max growth rate, sensitive planktonic}
+vmin  = -1     {min net rate for sensitive (max kill under ABX)}
+vmaxr = 1.2    {max growth rate, resistant planktonic}
+
+{Mutation from N -<gt> NR (stochastic, rare; optional)}
+mu1 = 1E-8
+
+
+{-------------------------}
+{ Parameters: immunity    }
+{-------------------------}
+gam  = 6E-7    {base phagocytosis rate constant}
+d    = 0.01    {phagocyte death}
+dib  = 0.01    {IB loss/death}
+
+q    = 0.08    {max recruitment rate}
+CI   = 6E5     {phagocyte reservoir supply}
+
+wI   = 0.005   {phagocyte turnover/egress timescale tweak}
+CritOn = 1E8   {planktonic threshold to turn immune latch ON}
+
+{-------------------------}
+{ Parameters: antibiotics }
+{-------------------------}
+da   = 0.01    {antibiotic decay}
+MIC  = 1       {MIC for sensitive}
+kh   = 1       {Hill coefficient}
+dose = 8       {hours between doses}
+AMAX = 2       {dose magnitude; set AMAX=0 for no-antibiotic baseline}
+
+CourseDur = 168  {fixed antibiotic course (7 days)}
+
+{Treatment trigger thresholds (choose one set at a time)}
+{ Early: Imin=2e5   , Bmin=370 }
+{ Mid:   Imin=2e6   , Bmin=435 }
+{ Late:  Imin=2.5e6 , Bmin=440 }
+Imin = 2E5
+Bmin = 370
+
+
+{----------------------------------------}
+{ Parameters: biofilm/refuge (key terms) }
+{----------------------------------------}
+{Exchange between planktonic and biofilm}
+ref0 = 0.003
+refI = 0.05
+KI   = 3e5
+ref  = ref0 + refI*(I/(I+KI))
+
+refout = 0.003   {shedding / exit from biofilm}
+wref   = 0.001   {biofilm loss/erosion independent of ABX}
+
+{Suppress new biofilm formation during antibiotics}
+kRefABX = 0.9995
+
+{Reduced exposure/effectiveness in biofilm}
+etaA   = 0.2     {ABX penetration/scaling in biofilm}
+etaImm = 0.02    {immune effectiveness scaling in biofilm}
+
+{Biofilm growth scaling + quiescence}
+fBio = 0.1
+kBio = 1E5
+
+{Biofilm antibiotic killing strength (sensitive only)}
+fKillBio  = 0.5
+kAbioKill = 0.1
+
+{Biofilm shielding from IB-mediated killing}
+fBioIB = 0.02
+
+{ABX-driven biofilm disruption/sloughing (mass dependent; latched at TxOn)}
+Kdis    = 5e5
+hDis    = 4
+kDiss   = 15
+wrefABX = 0.01
+
+
+{----------------------------------------}
+{ Parameters: cumulative burden proxy     }
+{----------------------------------------}
+Bscale  = 1e6
+betaBio = 0.5
+
+
+{-------------------------}
+{ Algebraic definitions   }
+{-------------------------}
+{Stochastic phagocytosis coefficient (fixed per run)}
+g = gam*(0.5 + QQ)
+
+psi    = r/(r+k)
+psiBio = r/(r+kBio)
+
+{Convenience totals}
+Nplanktonic = N + NR
+Nbio        = RefN + RefNR
+Ntot        = Nplanktonic + Nbio
+
+{Absorbing clearance latch}
+Alive  = IF (Cleared <gt> 0.5) THEN 0 ELSE 1
+dClear = IF (Ntot <lt> 1) and (Cleared <lt> 0.5) THEN 1/DT ELSE 0
+
+{Planktonic antibiotic pharmacodynamics (sensitive only)}
+HN = vmax - ((vmax - vmin)*(A/MIC)^kh) / ((A/MIC)^kh - vmin/vmax)
+
+{Biofilm antibiotic pharmacodynamics (sensitive only; reduced growth/kill)}
+vmaxB  = fBio*vmax
+vminB  = fKillBio*vmin
+vmaxBr = fBio*vmaxr
+
+Aref  = etaA*A
+HNref = vmaxB - ((vmaxB - vminB)*(Aref/MIC)^kh) / ((Aref/MIC)^kh - vminB/vmaxB)
+
+HNref_pos = IF HNref <gt> 0 THEN HNref ELSE 0
+HNref_neg = IF HNref <lt> 0 THEN HNref ELSE 0
+
+{Clamp for resource consumption}
+GN    = IF HN <gt> 0 THEN HN ELSE 0
+GNref = IF HNref <gt> 0 THEN HNref ELSE 0
+
+{Immune latch on planktonic burden}
+PhagTRIG = IF Nplanktonic <gt> CritOn THEN 1 ELSE 0
+PhagOFF  = IF (Nplanktonic <lt> 1e-3) and (Nbio <lt> 1e-3) THEN 1 ELSE 0
+
+{Immune effector term (off after clearance threshold so I can decay)}
+FIN = IF (PhagOn <gt> 0.5) and (Ntot <gt> 1) THEN 1 ELSE 0
+
+{Treatment trigger: requires immune state + cumulative burden}
+TRIG = IF (I <gt> Imin) and (Bcum <gt> Bmin) THEN 1 ELSE 0
+dTx  = IF (TRIG = 1) and (TxOn <lt> 0.5) THEN 1/DT ELSE 0
+
+{ABX active only if AMAX<gt>0 and within fixed course}
+ABX = IF (AMAX <gt> 0) and (TxOn <gt> 0.5) and (Tcourse <lt> CourseDur) THEN 1 ELSE 0
+
+{Suppress new biofilm formation during ABX}
+ref_eff = ref * (IF ABX <gt> 0.5 THEN (1 - kRefABX) ELSE 1)
+
+{Biofilm disruption factor computed at therapy start (latched)}
+bioFac0   = (NbioStart^hDis) / (NbioStart^hDis + Kdis^hDis)
+bioFacEff = bioFac0^2
+
+refout_eff = refout * (1 + kDiss*ABX*bioFacEff)
+wref_eff   = wref   + wrefABX*ABX*bioFacEff
+
+{Antibiotic dosing pulses}
+HTA       = IF (TTA <gt> dose) and (ABX <gt> 0.5) THEN TTA ELSE 0
+FIRSTDOSE = IF (TRIG = 1) and (TxOn <lt> 0.5) THEN AMAX/DT ELSE 0
+REDOSE    = IF (TTA <gt> dose) and (ABX <gt> 0.5) THEN AMAX/DT ELSE 0
+AIN       = FIRSTDOSE + REDOSE
+
+{Mutation (optional; Bernoulli per step when net growth <gt> 0)}
+r7      = Random(0,1)
+GROWPOS = IF HN <gt> 0 THEN 1 ELSE 0
+MSR     = N*mu1*DT*psi*GROWPOS
+MR      = IF (r7 <lt> MSR) and (N <gt> 1) THEN 1/DT ELSE 0
+
+
+{-------------------------}
+{ Differential equations  }
+{-------------------------}
+d/dt (Cleared) = dClear
+
+{Immune latch dynamics}
+d/dt (PhagOn) =
+  IF (PhagTRIG = 1) and (PhagOn <lt> 0.5) THEN  1/DT
+  ELSE IF (PhagOFF = 1) and (PhagOn <gt> 0.5) THEN -1/DT
+  ELSE 0
+
+{Resource dynamics}
+d/dt (r) = w*(C-r)
+          - e*GN*N*psi
+          - e*vmaxr*NR*psi
+          - e*GNref*RefN*psiBio
+          - e*vmaxBr*RefNR*psiBio
+
+{Planktonic bacteria (absorbing clearance forces to 0)}
+d/dt (N)  = Alive*( HN*N*psi
+          - g*FIN*I*N*psi
+          - g*FIN*N*IB*psi
+          - ref_eff*N + refout*RefN
+          - w*N
+          - MR ) - (1-Alive)*N/DT
+
+d/dt (NR) = Alive*( vmaxr*NR*psi
+          - g*FIN*NR*I*psi
+          - g*FIN*IB*NR*psi
+          - ref_eff*NR + refout*RefNR
+          - w*NR
+          + MR ) - (1-Alive)*NR/DT
+
+{Phagocytes}
+d/dt (I)  = CI*FIN*q - (wI + d)*I
+d/dt (IB) = g*I*N*psi*FIN + g*I*NR*psi*FIN - (wI + dib)*IB
+
+{Antibiotic}
+d/dt (A)  = AIN - A*(w+da)
+
+{Biofilm/refuge bacteria (absorbing clearance forces to 0)}
+d/dt (RefN)  = Alive*( HNref_pos*RefN*psiBio
+              + kAbioKill*HNref_neg*RefN
+              - etaImm*g*FIN*I*RefN
+              - etaImm*g*FIN*RefN*IB*fBioIB
+              + ref_eff*N
+              - refout_eff*RefN
+              - wref_eff*RefN ) - (1-Alive)*RefN/DT
+
+d/dt (RefNR) = Alive*( vmaxBr*RefNR*psiBio
+              - etaImm*g*FIN*I*RefNR
+              - etaImm*g*FIN*IB*RefNR*fBioIB
+              + ref_eff*NR
+              - refout_eff*RefNR
+              - wref_eff*RefNR ) - (1-Alive)*RefNR/DT
+
+{Cumulative burden (symptom proxy)}
+d/dt (Bcum) = Alive*(Nplanktonic + betaBio*Nbio) / Bscale
+
+{Latch Nbio at therapy start}
+d/dt (NbioStart) =
+  IF (TRIG = 1) and (TxOn <lt> 0.5) THEN (Nbio - NbioStart)/DT ELSE 0
+
+{Treatment latch + dosing timers}
+d/dt (TxOn)    = dTx
+d/dt (TTA)     = ABX - HTA/DT
+d/dt (Tcourse) = ABX
+
+
+{--- AUC metrics (area under curve) ---}
+Init AUC_Ntot = 0
+Init AUC_Npl  = 0
+Init AUC_Nbio = 0
+
+d/dt(AUC_Ntot) = Alive*Ntot
+d/dt(AUC_Npl)  = Alive*Nplanktonic
+d/dt(AUC_Nbio) = Alive*Nbio
+
+
+{--- Immunopathology proxy: damage accumulation and repair ---}
+kDmg    = 1e-7     {damage per immune unit-hour; tune for scaling}
+kRepair = 0.01     {repair rate (1/h); sets recovery timescale}
+alphaIB = 1        {relative weight of IB vs I}
+
+Init Dmg = 0
+d/dt(Dmg) = kDmg*FIN*(I + alphaIB*IB) - kRepair*Dmg
+
+{optional scalar summary}
+Init AUC_Dmg = 0
+d/dt(AUC_Dmg) = Dmg
+
+Init Tclear = -1
+d/dt(Tclear) = IF (dClear <gt> 0) THEN (TIME - Tclear)/DT ELSE 0
+
+Init Ttx = -1
+d/dt(Ttx) = IF (dTx <gt> 0) THEN (TIME - Ttx)/DT ELSE 0
+
+
+{--- resistance emergence ---}
+Init MutCount = 0
+d/dt(MutCount) = MR     {adds ~1 per mutation event}
+
+ResThresh = 1          {detection threshold; can use 10 or 100}
+Init ResEver = 0
+d/dt(ResEver) = IF ((NR + RefNR) <gt> ResThresh) and (ResEver <lt> 0.5) THEN 1/DT ELSE 0
+
+Init PeakRes = 0
+d/dt(PeakRes) = IF ((NR + RefNR) <gt> PeakRes) THEN ((NR + RefNR) - PeakRes)/DT ELSE 0
+
+Init AUC_Res = 0
+d/dt(AUC_Res) = (NR + RefNR)
+
+
+
+
+
+
+
+</jeditorpane>
+</jmadonna.EquationPanel>
+
+<imethod> euler </imethod>
+<Param> STARTTIME 1.0E-10 </Param>
+<Param> DTOUT 1.0 </Param>
+<Param> Imin 2500000.0 </Param>
+<Param> Bmin 440.0 </Param>
+<jmadonna.ParameterPanel>
+<DocPanel>
+</DocPanel>
+<ParamSets>
+</ParamSets>
+</jmadonna.ParameterPanel>
+<jmadonna.MultiPanel>
+<DocPanel>
+</DocPanel>
+<DividerPercent> 1.0 </DividerPercent>
+<Orientation> -1 </Orientation>
+<idx> 0 </idx>
+<TabSplitter>
+<SelectedIndex> 1 </SelectedIndex>
+<graph.COutputFrame>
+<DocPanel>
+<Name>
+Graph 1
+</Name>
+</DocPanel>
+
+<SingleView>
+<graph.COutputView>
+<Name> Graph </Name>
+<GraphToolBar>
+<Grid> 1 </Grid>
+</GraphToolBar>
+<Plot>
+<LineWidth> 3 </LineWidth>
+</Plot>
+<OV_XVAR>
+<VI_SYMBOL> TIME </VI_SYMBOL>
+</OV_XVAR>
+<OV_YVARS>
+<OV_YVAR_I>
+<VI_SYMBOL> N </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> NR </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> I </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> IB </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> A </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> r </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> RefN </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> RefNR </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+</OV_YVARS>
+<OV_TABLE> false </OV_TABLE>
+<OV_FFT> false </OV_FFT>
+<OV_COLORS> true </OV_COLORS>
+<OV_STYLES> false </OV_STYLES>
+<OV_OSCMODE> false </OV_OSCMODE>
+<OV_LINES> false </OV_LINES>
+<OV_POINTS> false </OV_POINTS>
+<OV_GRID> true </OV_GRID>
+<OV_DBTN> true </OV_DBTN>
+<OV_LEGEND> false </OV_LEGEND>
+<OV_PARAMS> false </OV_PARAMS>
+<OV_READOUT> false </OV_READOUT>
+<OV_INITCOND> false </OV_INITCOND>
+<OV_RDOUTFXFY> 0.0 0.0 </OV_RDOUTFXFY>
+<OV_ZSNORMAL>
+<ZS_SIZE> 1 </ZS_SIZE>
+<ZS_I>
+<ZS_XLOG> false </ZS_XLOG>
+<ZS_Y1MINMAXDIV> 0.1 1.0E10 11  </ZS_Y1MINMAXDIV>
+<ZS_Y1LOG> true </ZS_Y1LOG>
+<ZS_Y2LOG> false </ZS_Y2LOG>
+</ZS_I>
+</OV_ZSNORMAL>
+<OV_ZSFFT>
+<ZS_SIZE> 1 </ZS_SIZE>
+<ZS_I>
+<ZS_XLOG> true </ZS_XLOG>
+<ZS_Y1LOG> false </ZS_Y1LOG>
+<ZS_Y2LOG> false </ZS_Y2LOG>
+</ZS_I>
+</OV_ZSFFT>
+<OV_ZSOSCMODE>
+</OV_ZSOSCMODE>
+<OV_AUTOLABEL> 0 1 </OV_AUTOLABEL>
+<OV_AUTOLABEL> 1 1 </OV_AUTOLABEL>
+<OV_AUTOLABEL> 2 1 </OV_AUTOLABEL>
+<OV_X1LABELS>  TIME </OV_X1LABELS>
+<OV_Y1LABELS>  N, NR, I, IB, A, r, RefN, RefNR </OV_Y1LABELS>
+<OV_Y2LABELS>   </OV_Y2LABELS>
+<OV_LEGENDXY> 0.30000001192092896 0.5 </OV_LEGENDXY>
+<OV_PARAMSXY> 0.30000001192092896 0.5 </OV_PARAMSXY>
+<OV_COLORTABLE> 0 <OV_COLORTABLE>
+</graph.COutputView>
+</SingleView>
+</graph.COutputFrame>
+<graph.COutputFrame>
+<DocPanel>
+<Name>
+Graph 2
+</Name>
+</DocPanel>
+
+<SingleView>
+<graph.COutputView>
+<Name> Graph </Name>
+<GraphToolBar>
+<Table> 1 </Table>
+<Grid> 1 </Grid>
+</GraphToolBar>
+<Plot>
+<LineWidth> 3 </LineWidth>
+</Plot>
+<OV_XVAR>
+<VI_SYMBOL> TIME </VI_SYMBOL>
+</OV_XVAR>
+<OV_YVARS>
+<OV_YVAR_I>
+<VI_SYMBOL> N </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> RefN </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> A </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> I </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+<OV_YVAR_I>
+<VI_SYMBOL> IB </VI_SYMBOL>
+<VI_SHOW> true </VI_SHOW>
+<VI_Y2AXIS> false </VI_Y2AXIS>
+</OV_YVAR_I>
+</OV_YVARS>
+<OV_TABLE> true </OV_TABLE>
+<OV_FFT> false </OV_FFT>
+<OV_COLORS> true </OV_COLORS>
+<OV_STYLES> false </OV_STYLES>
+<OV_OSCMODE> false </OV_OSCMODE>
+<OV_LINES> true </OV_LINES>
+<OV_POINTS> false </OV_POINTS>
+<OV_GRID> true </OV_GRID>
+<OV_DBTN> false </OV_DBTN>
+<OV_LEGEND> false </OV_LEGEND>
+<OV_PARAMS> false </OV_PARAMS>
+<OV_READOUT> false </OV_READOUT>
+<OV_INITCOND> false </OV_INITCOND>
+<OV_RDOUTFXFY> 0.0 0.0 </OV_RDOUTFXFY>
+<OV_ZSNORMAL>
+<ZS_SIZE> 2 </ZS_SIZE>
+<ZS_I>
+<ZS_XLOG> false </ZS_XLOG>
+<ZS_Y1MINMAXDIV> 0.1 1.0E10 11  </ZS_Y1MINMAXDIV>
+<ZS_Y1LOG> true </ZS_Y1LOG>
+<ZS_Y2LOG> false </ZS_Y2LOG>
+</ZS_I>
+<ZS_I>
+<ZS_XLOG> false </ZS_XLOG>
+<ZS_Y1MINMAXDIV> 1.0 1.0E10 10  </ZS_Y1MINMAXDIV>
+<ZS_Y1LOG> true </ZS_Y1LOG>
+<ZS_Y2LOG> false </ZS_Y2LOG>
+</ZS_I>
+</OV_ZSNORMAL>
+<OV_ZSFFT>
+<ZS_SIZE> 1 </ZS_SIZE>
+<ZS_I>
+<ZS_XLOG> true </ZS_XLOG>
+<ZS_Y1LOG> false </ZS_Y1LOG>
+<ZS_Y2LOG> false </ZS_Y2LOG>
+</ZS_I>
+</OV_ZSFFT>
+<OV_ZSOSCMODE>
+</OV_ZSOSCMODE>
+<OV_AUTOLABEL> 0 1 </OV_AUTOLABEL>
+<OV_AUTOLABEL> 1 0 </OV_AUTOLABEL>
+<OV_AUTOLABEL> 2 1 </OV_AUTOLABEL>
+<OV_X1LABELS>  TIME </OV_X1LABELS>
+<OV_Y1LABELS>  N, NR, IB, A, RefN, RefNR, Ntot </OV_Y1LABELS>
+<OV_Y2LABELS>   </OV_Y2LABELS>
+<OV_LEGENDXY> 0.30000001192092896 0.5 </OV_LEGENDXY>
+<OV_PARAMSXY> 0.30000001192092896 0.5 </OV_PARAMSXY>
+<OV_COLORTABLE> 0 <OV_COLORTABLE>
+</graph.COutputView>
+</SingleView>
+</graph.COutputFrame>
+</TabSplitter>
+<idx> 1 </idx>
+<TabSplitter>
+<SelectedIndex> -1 </SelectedIndex>
+</TabSplitter>
+</jmadonna.MultiPanel>
+
+<BatchRunsInfo>
+STARTTIME 0
+<Series>
+0 1000 1.0E-10 1.0E-10
+</Series>
+</BatchRunsInfo>
+</Document>
